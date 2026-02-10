@@ -15,7 +15,7 @@ import iconCamera from "./assets/icon-camera.svg";
 import iconInspectAI from "./assets/icon-inspectai.svg";
 import PhotoGallery from "./PhotoGallery.jsx";
 import { openProposalPreview } from "./ProposalPreview.jsx";
-import { DRAFT_KEY, DEFAULT_RATES, writeDraft, normalizeRepairs, normalizeAdditionalItems } from "./proposalDraft.js";
+import { DRAFT_KEY, DEFAULT_RATES, writeDraft, readDraft, mergeDraft, normalizeRepairs, normalizeAdditionalItems } from "./proposalDraft.js";
 
 const Icon = ({ src, alt = "" }) => (
   <span className="inline-flex items-center justify-center" aria-hidden>
@@ -306,7 +306,7 @@ export default function App() {
   }
 
   useEffect(() => {
-    writeDraft(buildDraftFromState());
+    writeDraft(mergeDraft(readDraft(), buildDraftFromState()));
   }, [
     restaurantName,
     address,
@@ -407,7 +407,7 @@ export default function App() {
     return () => window.removeEventListener("storage", onStorage);
   }, []);
 
-  // Keep history persisted
+  // Keep history persisted in localStorage (fallback)
   useEffect(() => {
     try {
       localStorage.setItem("inspectai_history", JSON.stringify(history));
@@ -415,6 +415,47 @@ export default function App() {
       // ignore storage errors
     }
   }, [history]);
+
+  // Fetch history from server (30-day retention) on mount
+  useEffect(() => {
+    fetch("/api/reports")
+      .then((r) => r.ok ? r.json() : null)
+      .then((body) => {
+        if (body?.ok && Array.isArray(body.reports) && body.reports.length > 0) {
+          const items = body.reports.map((r) => ({
+            id: r.id,
+            reportId: r.id,
+            restaurantName: r.restaurantName || "",
+            address: r.address || "",
+            createdAt: r.createdAt || new Date().toISOString(),
+            snapshot: {
+              hoods: Number(r.hoods) || 0,
+              fans: Number(r.fans) || 0,
+              filters: Number(r.filters) || 0,
+              notes: r.notes || "",
+              photoCount: (r.photoAnalysis || []).length,
+            },
+            report: {
+              reportText: r.reportText || r.summary,
+              summary: r.summary,
+              photos: r.photoAnalysis || [],
+              reportId: r.id,
+            },
+          }));
+          setHistory((prev) => {
+            // Merge: prefer server items, add any local-only items not on server
+            const byId = new Map(items.map((i) => [i.id, i]));
+            prev.forEach((p) => {
+              if (!byId.has(p.id) && !byId.has(p.reportId)) byId.set(p.id, p);
+            });
+            return Array.from(byId.values()).sort(
+              (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
+            );
+          });
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // ESC to close upload thumbnails lightbox
   useEffect(() => {
@@ -476,15 +517,18 @@ export default function App() {
       }
 
       const data = await res.json();
-      setLatestReport({
+      const reportData = {
         ...data,
         reportText: data.reportText || data.summary,
         photos: data.photoAnalysis || [],
-      });
+        reportId: data.reportId || null,
+      };
+      setLatestReport(reportData);
 
-      // Save to Recent History (store only the minimal snapshot + the report output)
+      // Save to Recent History (persisted server-side for 30 days when reportId present)
       const item = {
-        id: crypto.randomUUID(),
+        id: data.reportId || crypto.randomUUID(),
+        reportId: data.reportId || null,
         restaurantName: restaurantName.trim(),
         address: address.trim(),
         createdAt: new Date().toISOString(),
@@ -496,13 +540,13 @@ export default function App() {
           photoCount: photos.length,
         },
         report: {
-          ...data,
+          ...reportData,
           reportText: data.reportText || data.summary,
           photos: data.photoAnalysis || [],
         },
       };
 
-      setHistory((prev) => [item, ...prev].slice(0, 10));
+      setHistory((prev) => [item, ...prev].slice(0, 50));
 
       alert("Report generated ✅\n(Next: we’ll replace this alert with an in-app preview.)");
     } catch (err) {
@@ -539,11 +583,32 @@ export default function App() {
       <main className="mx-auto max-w-6xl px-6 py-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left */}
         <div className="lg:col-span-2 space-y-5">
-          <div>
-            <h2 className="text-3xl font-bold">New Inspection</h2>
-            <p className="text-white/60 mt-2">
-              Enter the raw details and let AI write the professional summary.
-            </p>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-3xl font-bold">New Inspection</h2>
+              <p className="text-white/60 mt-2">
+                Enter the raw details and let AI write the professional summary.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setRestaurantName("");
+                setAddress("");
+                setHoods(1);
+                setFans(1);
+                setFilters(0);
+                setNotes("");
+                setPhotos([]);
+                setLatestReport(null);
+                setApiError("");
+                setIsReportEditing(false);
+                setEditedReportText("");
+              }}
+              className="shrink-0 px-4 py-2.5 rounded-xl border border-white/20 bg-white/5 hover:bg-white/10 text-white font-medium text-sm transition"
+            >
+              Create New
+            </button>
           </div>
 
           <Section step="1" title="Restaurant Details" icon={<Icon src={iconRestaurant} />}>
@@ -784,24 +849,35 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      const payload = {
-                        reportText:
-                          latestReport.reportText || latestReport.summary,
-                        photos: galleryPhotos.map((p) => ({
-                          filename: p.filename,
-                          caption: p.caption || p.analysis,
-                          publicUrl: p.publicUrl || undefined,
-                          localUrl: p.localUrl || undefined,
-                        })),
-                      };
-                      const b64 = btoa(
-                        unescape(encodeURIComponent(JSON.stringify(payload)))
-                      );
-                      window.open(
-                        `${window.location.origin}/report.html#${b64}`,
-                        "_blank",
-                        "noopener,noreferrer"
-                      );
+                      const reportId = latestReport.reportId;
+                      if (reportId) {
+                        // Use persisted share link (saved for 30 days)
+                        window.open(
+                          `${window.location.origin}/report.html?id=${reportId}`,
+                          "_blank",
+                          "noopener,noreferrer"
+                        );
+                      } else {
+                        // Fallback: embed data in URL hash (legacy)
+                        const payload = {
+                          reportText:
+                            latestReport.reportText || latestReport.summary,
+                          photos: galleryPhotos.map((p) => ({
+                            filename: p.filename,
+                            caption: p.caption || p.analysis,
+                            publicUrl: p.publicUrl || undefined,
+                            localUrl: p.localUrl || undefined,
+                          })),
+                        };
+                        const b64 = btoa(
+                          unescape(encodeURIComponent(JSON.stringify(payload)))
+                        );
+                        window.open(
+                          `${window.location.origin}/report.html#${b64}`,
+                          "_blank",
+                          "noopener,noreferrer"
+                        );
+                      }
                     }}
                     className="text-sm px-3 py-1.5 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 text-white/90 transition"
                   >
@@ -909,6 +985,7 @@ export default function App() {
                               ...r,
                               reportText: r.reportText || r.summary,
                               photos: r.photos ?? r.photoAnalysis ?? [],
+                              reportId: r.reportId ?? h.reportId ?? h.id,
                             }
                           : null
                       );

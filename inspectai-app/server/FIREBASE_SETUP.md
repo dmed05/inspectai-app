@@ -52,6 +52,15 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json
 FIREBASE_STORAGE_BUCKET=your-project-id.appspot.com
 ```
 
-## 4. Verify
+## 4. Firestore (report history & share links)
 
-Restart the server and hit `GET /health`. The response should include `"firebaseStorage": true`. Generated reports will include `publicUrl` for each photo in `photoAnalysis`.
+Report history and shareable links are stored in **Firestore** for 30 days. The same Firebase project and service account are used.
+
+1. In [Firebase Console](https://console.firebase.google.com/) → your project → **Build → Firestore Database**
+2. Click **Create database** (if not already created) and choose **Start in production mode**
+3. No extra env vars needed — the server uses the same `FIREBASE_SERVICE_ACCOUNT_PATH` and `FIREBASE_STORAGE_BUCKET` config
+4. Reports older than 30 days are deleted automatically on server startup
+
+## 5. Verify
+
+Restart the server and hit `GET /health`. The response should include `"firebaseStorage": true`. Generated reports will include `publicUrl` for each photo in `photoAnalysis` and `reportId` for shareable links.

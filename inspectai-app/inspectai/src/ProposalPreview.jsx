@@ -623,6 +623,23 @@ export default function ProposalPreviewPage() {
                 </FieldGroup>
               </div>
 
+              <FieldGroup label="Filter details notes">
+                {isEditing ? (
+                  <textarea
+                    value={active.filterDetailsNotes ?? ""}
+                    onChange={(e) => set("filterDetailsNotes")(e.target.value)}
+                    placeholder="Enter notes for filter details…"
+                    rows={3}
+                    className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white placeholder:text-white/40 focus:outline-none focus:ring-2 focus:ring-blue-500/40 leading-relaxed resize-y min-h-[80px]"
+                  />
+                ) : (
+                  <DisplayField
+                    value={active.filterDetailsNotes?.trim() || "—"}
+                    align="left"
+                  />
+                )}
+              </FieldGroup>
+
               <Divider />
 
               {/* Custom Repairs (One-time charge) */}

@@ -72,3 +72,74 @@ export async function uploadPhotoAndGetUrl(buffer, filename, mimeType, index = 0
 
   return url;
 }
+
+// ----- Firestore: Report history (30-day retention) -----
+const REPORTS_COLLECTION = "inspection_reports";
+const RETENTION_DAYS = 30;
+
+export async function saveReport(reportData) {
+  initFirebase();
+  if (!firebaseReady) return null;
+
+  const db = admin.firestore();
+  const doc = {
+    ...reportData,
+    createdAt: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  const ref = await db.collection(REPORTS_COLLECTION).add(doc);
+  return ref.id;
+}
+
+function normalizeReportDoc(snap) {
+  const data = typeof snap.data === "function" ? snap.data() : snap;
+  const id = snap.id || data.id;
+  const created = data.createdAt;
+  const createdAt =
+    created?.toDate?.()?.toISOString?.() ??
+    (typeof created === "string" ? created : new Date().toISOString());
+  const photos = data.photos || data.photoAnalysis || [];
+  return { ...data, id, createdAt, photoAnalysis: photos, photos };
+}
+
+export async function getReportById(id) {
+  initFirebase();
+  if (!firebaseReady) return null;
+
+  const db = admin.firestore();
+  const snap = await db.collection(REPORTS_COLLECTION).doc(id).get();
+  if (!snap.exists) return null;
+  return normalizeReportDoc(snap);
+}
+
+export async function listReports(limit = 50) {
+  initFirebase();
+  if (!firebaseReady) return [];
+
+  const db = admin.firestore();
+  const snap = await db
+    .collection(REPORTS_COLLECTION)
+    .orderBy("createdAt", "desc")
+    .limit(limit)
+    .get();
+  return snap.docs.map((d) => normalizeReportDoc(d));
+}
+
+export async function deleteReportsOlderThan(days = RETENTION_DAYS) {
+  initFirebase();
+  if (!firebaseReady) return 0;
+
+  const db = admin.firestore();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - days);
+
+  const snap = await db
+    .collection(REPORTS_COLLECTION)
+    .where("createdAt", "<", cutoff)
+    .limit(500)
+    .get();
+
+  const batch = db.batch();
+  snap.docs.forEach((d) => batch.delete(d.ref));
+  await batch.commit();
+  return snap.size;
+}

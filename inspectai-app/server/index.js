@@ -6,6 +6,10 @@ import OpenAI from "openai";
 import {
   uploadPhotoAndGetUrl,
   isFirebaseConfigured,
+  saveReport,
+  getReportById,
+  listReports,
+  deleteReportsOlderThan,
 } from "./firebase.js";
 
 /**
@@ -161,6 +165,32 @@ app.get("/health", (req, res) => {
     message: "Server connected ✅",
     firebaseStorage: isFirebaseConfigured(),
   });
+});
+
+// ✅ List reports (history) - retained for 30 days
+app.get("/api/reports", async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 50, 100);
+    const reports = await listReports(limit);
+    res.json({ ok: true, reports });
+  } catch (err) {
+    console.error("GET /api/reports error:", err);
+    res.status(500).json({ ok: false, error: err?.message });
+  }
+});
+
+// ✅ Get single report by ID (for share page)
+app.get("/api/reports/:id", async (req, res) => {
+  try {
+    const report = await getReportById(req.params.id);
+    if (!report) {
+      return res.status(404).json({ ok: false, error: "Report not found" });
+    }
+    res.json({ ok: true, report });
+  } catch (err) {
+    console.error("GET /api/reports/:id error:", err);
+    res.status(500).json({ ok: false, error: err?.message });
+  }
 });
 
 // ✅ This is what your frontend calls: POST /api/generate
@@ -326,14 +356,41 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
       publicUrl: p.publicUrl ?? null,
     }));
 
-    res.json({
+    const reportPayload = {
       ok: true,
       reportText: inspectionSummary,
       summary: inspectionSummary,
       photoAnalysis,
       inspectionSummary,
       _timing: { photoAnalysisTimeMs, summaryTimeMs, totalTimeMs },
-    });
+    };
+
+    // Persist report for 30-day history and shareable links (includes uploaded photos via publicUrl)
+    try {
+      const photosForStorage = photoAnalysis.map((p) => ({
+        filename: p.filename || "",
+        analysis: p.analysis || "",
+        caption: p.caption || "",
+        publicUrl: p.publicUrl || null,
+      }));
+      const reportId = await saveReport({
+        restaurantName: (restaurantName || "").trim(),
+        address: (address || "").trim(),
+        hoods: String(hoods || "0"),
+        fans: String(fans || "0"),
+        filters: String(filters || "0"),
+        notes: (notes || "").trim(),
+        reportText: inspectionSummary,
+        summary: inspectionSummary,
+        photoAnalysis: photosForStorage,
+        photos: photosForStorage,
+      });
+      if (reportId) reportPayload.reportId = reportId;
+    } catch (saveErr) {
+      console.warn("Report save (Firestore) failed:", saveErr?.message);
+    }
+
+    res.json(reportPayload);
   } catch (err) {
     console.error("/api/generate error:", err);
     res.status(500).json({
@@ -344,6 +401,13 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
 });
 
 const PORT = process.env.PORT || 5050;
-app.listen(PORT, () =>
-  console.log(`Server running on http://localhost:${PORT}`)
-);
+app.listen(PORT, async () => {
+  console.log(`Server running on http://localhost:${PORT}`);
+  // Cleanup reports older than 30 days on startup
+  try {
+    const deleted = await deleteReportsOlderThan(30);
+    if (deleted > 0) console.log(`Deleted ${deleted} reports older than 30 days`);
+  } catch (e) {
+    console.warn("Report cleanup on startup failed:", e?.message);
+  }
+});
