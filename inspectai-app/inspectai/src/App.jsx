@@ -513,7 +513,13 @@ export default function App() {
 
       if (!res.ok) {
         const text = await res.text().catch(() => "");
-        throw new Error(text || `Request failed (${res.status})`);
+        try {
+          const errBody = JSON.parse(text);
+          if (errBody?.error) throw new Error(errBody.error);
+        } catch (e) {
+          if (e instanceof Error && e.message && !(e instanceof SyntaxError)) throw e;
+          throw new Error(text || `Request failed (${res.status})`);
+        }
       }
 
       const data = await res.json();

@@ -1,4 +1,41 @@
 import "dotenv/config";
+
+// Read and normalize key (trim + optional quotes from .env; fix double "sk-" if pasted wrong)
+let rawKey = (process.env.OPENAI_API_KEY || "").trim();
+if (
+  (rawKey.startsWith('"') && rawKey.endsWith('"')) ||
+  (rawKey.startsWith("'") && rawKey.endsWith("'"))
+) {
+  rawKey = rawKey.slice(1, -1).trim();
+}
+const openaiApiKey =
+  rawKey.startsWith("sk-sk-proj-") ? rawKey.slice(3) : rawKey;
+const prefix =
+  openaiApiKey.startsWith("sk-proj-")
+    ? "sk-proj-"
+    : openaiApiKey.startsWith("sk-")
+      ? "sk-"
+      : rawKey.slice(0, 10);
+
+// keySuffix = last 4 chars (e.g. 72AA) — verify this matches your intended key in the dashboard
+const keySuffix = openaiApiKey.length >= 4 ? openaiApiKey.slice(-4) : "(none)";
+console.log("ENV KEY CHECK:", {
+  cwd: process.cwd(),
+  prefix,
+  keySuffix,
+  length: rawKey.length,
+  startsWithSk: rawKey.startsWith("sk-"),
+});
+
+if (!openaiApiKey.length) {
+  console.error("FATAL: OPENAI_API_KEY is missing or empty in server/.env. Set it and restart.");
+  process.exit(1);
+}
+if (!(process.env.PHOTO_VISION_PROMPT_ID && process.env.INSPECTION_SUMMARY_PROMPT_ID)) {
+  console.error("FATAL: PHOTO_VISION_PROMPT_ID and INSPECTION_SUMMARY_PROMPT_ID must be set in server/.env.");
+  process.exit(1);
+}
+
 import express from "express";
 import cors from "cors";
 import multer from "multer";
@@ -111,7 +148,7 @@ async function withRetry(fn, { maxAttempts = 3 } = {}) {
 
 // OpenAI client (expects OPENAI_API_KEY in server/.env)
 // Note: we validate env vars before the first request too.
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({ apiKey: openaiApiKey });
 
 /**
  * Run a saved Prompt by ID using the Responses API.
@@ -195,15 +232,17 @@ app.get("/api/reports/:id", async (req, res) => {
 
 // ✅ This is what your frontend calls: POST /api/generate
 app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
+  console.log("🔥 HIT /api/generate");
+  console.log("files:", req.files?.length);
+  console.log("body keys:", Object.keys(req.body || {}));
+
   const t0 = Date.now();
 
   try {
-    // Fail fast on env vars (per request so errors are obvious)
+    // Fail fast on env vars
     assertEnv("OPENAI_API_KEY");
     const PHOTO_VISION_PROMPT_ID = assertEnv("PHOTO_VISION_PROMPT_ID");
-    const INSPECTION_SUMMARY_PROMPT_ID = assertEnv(
-      "INSPECTION_SUMMARY_PROMPT_ID"
-    );
+    const INSPECTION_SUMMARY_PROMPT_ID = assertEnv("INSPECTION_SUMMARY_PROMPT_ID");
 
     const {
       restaurantName = "",
@@ -393,9 +432,16 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
     res.json(reportPayload);
   } catch (err) {
     console.error("/api/generate error:", err);
+    let msg = err?.message || "Server error in /api/generate";
+    if (
+      err?.status === 401 ||
+      String(msg).toLowerCase().includes("incorrect api key")
+    ) {
+      msg += " Check OPENAI_API_KEY in server/.env (no quotes, no extra spaces) and that the key is valid at https://platform.openai.com/account/api-keys.";
+    }
     res.status(500).json({
       ok: false,
-      error: err?.message || "Server error in /api/generate",
+      error: msg,
     });
   }
 });
