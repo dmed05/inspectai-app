@@ -269,48 +269,269 @@ export default function ProposalPreviewPage() {
     add(active.fuelFrequency || active.cleaningFrequency);
     return [...set].filter(Boolean).join(" & ") || "—";
   }, [active, additionalItems]);
+async function copyProposalToClipboard() {
+    const escapeHtml = (v) =>
+      String(v ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/\"/g, "&quot;")
+        .replace(/'/g, "&#39;");
 
-  function copyProposalToClipboard() {
-    const row = (desc, amt) => `${desc}\t${amt}`;
-    const lines = [
-      "PROPOSAL",
-      "",
-      `Restaurant: ${active.restaurantName || "—"}`,
-      `Proposal Date: ${active.proposalDate || "—"}`,
-      `Cleaning Frequency: ${allFrequencies}`,
-      "",
-      row("Description", "Amount"),
-      "—".repeat(40),
-    ];
+    const title = "Service Proposal";
+    const restaurant = String(active.restaurantName || "—");
+    const proposalDate = String(active.proposalDate || "—");
+    const frequency = String(allFrequencies || "—");
+
+    // Build line items (same logic as the text version, but structured)
+    const items = [];
+
     const baseDesc = `Base rate — Initial hood: 1, Initial fan: 1${active.cleaningFrequency ? ` (${active.cleaningFrequency})` : ""}`;
-    lines.push(row(baseDesc, money(active.baseRate)));
+    items.push({
+      description: baseDesc,
+      amount: safeNum(active.baseRate),
+    });
+
     additionalItems
       .filter((item) => (item.qty || 0) * (item.rate || 0) > 0)
       .forEach((item) => {
         const lineTotal = (item.qty || 0) * (item.rate || 0);
         const desc = item.description || "—";
         const detail = `${item.qty ?? 0} × ${money(item.rate)}${item.frequency ? ` (${item.frequency})` : ""}`;
-        lines.push(row(`${desc} — ${detail}`, money(lineTotal)));
+        items.push({ description: `${desc} — ${detail}`, amount: lineTotal });
       });
+
     const stdFilterTotal = safeNum(active.stdFilterQty) * safeNum(active.stdFilterRate);
     if (stdFilterTotal > 0) {
-      lines.push(row(`Standard Filters — ${active.stdFilterQty ?? 0} × ${money(active.stdFilterRate)}${active.filterExchangeFrequency ? ` (${active.filterExchangeFrequency})` : ""}`, money(stdFilterTotal)));
+      items.push({
+        description: `Standard Filters — ${active.stdFilterQty ?? 0} × ${money(active.stdFilterRate)}${active.filterExchangeFrequency ? ` (${active.filterExchangeFrequency})` : ""}`,
+        amount: stdFilterTotal,
+      });
     }
+
     const nonStdFilterTotal = safeNum(active.nonStdFilterQty) * safeNum(active.nonStdFilterRate);
     if (nonStdFilterTotal > 0) {
-      lines.push(row(`Non-Standard Filters — ${active.nonStdFilterQty ?? 0} × ${money(active.nonStdFilterRate)}`, money(nonStdFilterTotal)));
+      items.push({
+        description: `Non-Standard Filters — ${active.nonStdFilterQty ?? 0} × ${money(active.nonStdFilterRate)}`,
+        amount: nonStdFilterTotal,
+      });
     }
-    repairs.filter((r) => (r.description || r.amount) && Number(r.amount) > 0).forEach((r) => {
-      lines.push(row(r.description || "—", money(r.amount)));
-    });
+
+    repairs
+      .filter((r) => (r.description || r.amount) && Number(r.amount) > 0)
+      .forEach((r) => items.push({ description: r.description || "—", amount: Number(r.amount) || 0 }));
+
     if (totals.fuelSubtotal > 0) {
-      lines.push(row(`Fuel surcharge${active.fuelFrequency || active.cleaningFrequency ? ` (${active.fuelFrequency || active.cleaningFrequency})` : ""}`, money(totals.fuelSubtotal)));
+      items.push({
+        description: `Fuel surcharge${active.fuelFrequency || active.cleaningFrequency ? ` (${active.fuelFrequency || active.cleaningFrequency})` : ""}`,
+        amount: totals.fuelSubtotal,
+      });
     }
-    lines.push("", "—".repeat(40));
-    lines.push(row("Total Per Service", money(totals.totalPerService)));
-    const text = lines.join("\r\n");
-    navigator.clipboard.writeText(text).catch(() => {});
-  }
+
+    const total = safeNum(totals.totalPerService);
+
+    // Plain text (TSV-friendly) — pastes as a table in Docs/Sheets/Word
+    const tsv = (cols) => cols.map((c) => String(c ?? "").replace(/\s+/g, " ").trim()).join("\t");
+
+    // Build structured rows so the pasted result is an actual table
+    const itemRows = [];
+
+    // Base rate row
+    itemRows.push({
+      description: "Base rate",
+      qty: 1,
+      rate: safeNum(active.baseRate),
+      frequency: active.cleaningFrequency || "",
+      amount: safeNum(active.baseRate),
+      notes: "Includes 1 hood + 1 fan",
+    });
+
+    // Additional item rows
+    additionalItems
+      .filter((item) => (item.qty || 0) * (item.rate || 0) > 0)
+      .forEach((item) => {
+        const qty = Number(item.qty) || 0;
+        const rate = Number(item.rate) || 0;
+        itemRows.push({
+          description: item.description || "—",
+          qty,
+          rate,
+          frequency: item.frequency || "",
+          amount: qty * rate,
+          notes: "",
+        });
+      });
+
+    // Filters
+    if (stdFilterTotal > 0) {
+      itemRows.push({
+        description: "Standard Filters",
+        qty: safeNum(active.stdFilterQty),
+        rate: safeNum(active.stdFilterRate),
+        frequency: active.filterExchangeFrequency || "",
+        amount: stdFilterTotal,
+        notes: "",
+      });
+    }
+
+    if (nonStdFilterTotal > 0) {
+      itemRows.push({
+        description: "Non-Standard Filters",
+        qty: safeNum(active.nonStdFilterQty),
+        rate: safeNum(active.nonStdFilterRate),
+        frequency: "",
+        amount: nonStdFilterTotal,
+        notes: "",
+      });
+    }
+
+    // Repairs (no qty/rate; keep amount)
+    repairs
+      .filter((r) => (r.description || r.amount) && Number(r.amount) > 0)
+      .forEach((r) => {
+        itemRows.push({
+          description: r.description || "Repair",
+          qty: "",
+          rate: "",
+          frequency: "",
+          amount: Number(r.amount) || 0,
+          notes: "Repair",
+        });
+      });
+
+    // Fuel surcharge
+    if (totals.fuelSubtotal > 0) {
+      itemRows.push({
+        description: "Fuel surcharge",
+        qty: 1,
+        rate: safeNum(totals.fuelSubtotal),
+        frequency: active.fuelFrequency || active.cleaningFrequency || "",
+        amount: safeNum(totals.fuelSubtotal),
+        notes: "",
+      });
+    }
+
+    const lines = [
+      "PROPOSAL",
+      "",
+      tsv(["Restaurant", restaurant]),
+      tsv(["Proposal Date", proposalDate]),
+      tsv(["Cleaning Frequency", frequency]),
+      "",
+      tsv(["Description", "Qty", "Rate", "Frequency", "Amount", "Notes"]),
+      ...itemRows.map((r) =>
+        tsv([
+          r.description,
+          r.qty,
+          r.rate === "" ? "" : money(r.rate),
+          r.frequency,
+          money(r.amount),
+          r.notes,
+        ])
+      ),
+      "",
+      tsv(["Total Per Service", "", "", "", money(total), ""]),
+    ];
+
+    const plainText = lines.join("\r\n");
+
+    // Documents-only HTML (Google Docs / Word)
+    // Target: match the simple document look (meta rows + 2-col pricing table).
+
+    const docCss = {
+      font: "font-family:Calibri,Arial,sans-serif;",
+      text: "color:#111827;",
+      line: "border-top:1px solid #CBD5E1;",
+      border: "border:1px solid #E5E7EB;",
+      cell: "padding:8px 10px;vertical-align:top;",
+      th: "background:#FFFFFF;font-weight:700;",
+      label: "font-size:12px;color:#111827;",
+      value: "font-size:14px;font-weight:700;margin-top:2px;",
+    };
+
+    const metaRow = (label, value) => `
+      <tr>
+        <td style="${docCss.cell}${docCss.line}">
+          <div style="${docCss.label}">${escapeHtml(label)}</div>
+          <div style="${docCss.value}">${escapeHtml(value || "")}</div>
+        </td>
+      </tr>`;
+
+    const metaHtml = `
+      <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;${docCss.font}${docCss.text}">
+        ${metaRow("Restaurant", restaurant || "")}
+        ${metaRow("Proposal Date", proposalDate || "")}
+        ${metaRow("Cleaning Frequency", frequency || "")}
+      </table>`;
+
+    const itemDesc = (it) => {
+      const d = it.description || "";
+      const q = it.qty === "" || it.qty == null ? null : Number(it.qty);
+      const r = it.rate === "" || it.rate == null ? null : Number(it.rate);
+      const freq = it.frequency ? String(it.frequency) : "";
+
+      let parts = [d];
+      if (q != null && r != null && !Number.isNaN(q) && !Number.isNaN(r) && q !== 0) {
+        parts.push(`— ${q} × ${money(r)}`);
+      }
+      if (freq) parts.push(`(${freq})`);
+      return parts.join(' ');
+    };
+
+    const itemsHtml = itemRows
+      .map((it) => {
+        const desc = escapeHtml(itemDesc(it));
+        const amt = escapeHtml(money(it.amount));
+        return `
+          <tr>
+            <td style="${docCss.cell}${docCss.border};border-right:none;">${desc}</td>
+            <td style="${docCss.cell}${docCss.border};border-left:none;text-align:right;white-space:nowrap;">${amt}</td>
+          </tr>`;
+      })
+      .join('');
+
+    const html = `
+      <div style="${docCss.font}${docCss.text}">
+        ${metaHtml}
+        <div style="height:10px"></div>
+
+        <table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;${docCss.font}${docCss.text}">
+          <thead>
+            <tr>
+              <th style="${docCss.cell}${docCss.border}${docCss.th};text-align:left;border-right:none;">Description</th>
+              <th style="${docCss.cell}${docCss.border}${docCss.th};text-align:right;border-left:none;">Amount</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${itemsHtml || `<tr><td colspan="2" style="${docCss.cell}${docCss.border};color:#6B7280;">No pricing items.</td></tr>`}
+            <tr>
+              <td style="${docCss.cell}${docCss.border};font-weight:800;border-right:none;">Total Per Service</td>
+              <td style="${docCss.cell}${docCss.border};text-align:right;font-weight:900;white-space:nowrap;border-left:none;">${escapeHtml(money(total))}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`.trim();
+
+// Write BOTH HTML + plain text when supported
+
+      try {
+        if (navigator.clipboard && window.ClipboardItem) {
+          const data = {
+            "text/plain": new Blob([plainText], { type: "text/plain" }),
+            "text/html": new Blob([html], { type: "text/html" }),
+          };
+          await navigator.clipboard.write([new ClipboardItem(data)]);
+        } else {
+          await navigator.clipboard.writeText(plainText);
+        }
+      } catch {
+        // last-resort fallback
+        try {
+          await navigator.clipboard.writeText(plainText);
+        } catch {}
+      }
+    
+}
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-[#0a1020] via-[#070b14] to-black text-white">
@@ -375,15 +596,7 @@ export default function ProposalPreviewPage() {
           >
             Proposal Preview
           </button>
-          {activeTab === "preview" && (
-            <button
-              type="button"
-              onClick={copyProposalToClipboard}
-              className="text-sm px-4 py-2 rounded-lg border border-white/20 bg-white/5 hover:bg-white/10 text-white/90 transition"
-            >
-              Copy
-            </button>
-          )}
+          
           {activeTab === "config" && !isEditing && (
             <button
               type="button"

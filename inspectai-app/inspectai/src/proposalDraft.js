@@ -18,34 +18,46 @@ export function safeNum(v) {
 
 /** Normalize additional items (hoods/fans) to array of { description, qty, rate, frequency } */
 export function normalizeAdditionalItems(draft) {
-  const defaultFreq = draft?.cleaningFrequency || "";
-  if (Array.isArray(draft.additionalItems) && draft.additionalItems.length > 0) {
-    return draft.additionalItems.map((a) => ({
+  const defaultFreq = String(draft?.cleaningFrequency ?? "");
+
+  const raw = Array.isArray(draft?.additionalItems) ? draft.additionalItems : [];
+
+  const norm = raw
+    .filter(Boolean)
+    .map((a) => ({
       description: String(a?.description ?? ""),
-      qty: safeNum(a?.qty),
-      rate: orDefault(a?.rate, DEFAULT_RATES.additionalHoodRate),
-      frequency: String(a?.frequency ?? defaultFreq).trim() || defaultFreq,
+      qty: Number(a?.qty) || 0,
+      rate: Number(a?.rate) || 0,
+      frequency: String(a?.frequency ?? ""),
     }));
-  }
-  const items = [];
-  if (draft.additionalHoodQty != null || draft.additionalHoodRate != null) {
-    items.push({
-      description: "Additional Hood",
-      qty: safeNum(draft.additionalHoodQty),
-      rate: orDefault(draft.additionalHoodRate, DEFAULT_RATES.additionalHoodRate),
-      frequency: draft.additionalFrequency || draft.cleaningFrequency || defaultFreq,
-    });
-  }
-  if (draft.additionalFanQty != null || draft.additionalFanRate != null) {
-    items.push({
-      description: "Additional Fan",
-      qty: safeNum(draft.additionalFanQty),
-      rate: orDefault(draft.additionalFanRate, DEFAULT_RATES.additionalFanRate),
-      frequency: draft.additionalFrequency || draft.cleaningFrequency || defaultFreq,
-    });
-  }
-  if (items.length > 0) return items;
-  return [{ description: "Additional Hood", qty: 0, rate: DEFAULT_RATES.additionalHoodRate, frequency: defaultFreq }];
+
+  const findByDesc = (name) =>
+    norm.find((x) => String(x.description || "").trim().toLowerCase() === name.toLowerCase());
+
+  const hoodExisting = findByDesc("Additional Hood");
+  const fanExisting = findByDesc("Additional Fan");
+
+  const hoodRow = {
+    description: "Additional Hood",
+    qty: hoodExisting?.qty ?? 0,
+    rate: Number.isFinite(hoodExisting?.rate) ? hoodExisting.rate : DEFAULT_RATES.additionalHoodRate,
+    frequency: (hoodExisting?.frequency ?? defaultFreq) || "",
+  };
+
+  const fanRow = {
+    description: "Additional Fan",
+    qty: fanExisting?.qty ?? 0,
+    rate: Number.isFinite(fanExisting?.rate) ? fanExisting.rate : DEFAULT_RATES.additionalFanRate,
+    frequency: (fanExisting?.frequency ?? defaultFreq) || "",
+  };
+
+  // Preserve any other add-ons the user may have added (exclude hood/fan canonical rows)
+  const others = norm.filter((x) => {
+    const d = String(x.description || "").trim().toLowerCase();
+    return d && d !== "additional hood" && d !== "additional fan";
+  });
+
+  return [hoodRow, fanRow, ...others];
 }
 
 function orDefault(val, def) {

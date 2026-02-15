@@ -4,6 +4,9 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
+    "start": "node index.js",
+    "start:prod": "node index.js",
+    "build:frontend": "cd ../inspectai && npm run build",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

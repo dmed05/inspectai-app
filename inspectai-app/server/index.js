@@ -1,4 +1,7 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+
+// Load .env and override any system/terminal env (server/.env always wins)
+dotenv.config({ path: ".env", override: true });
 
 // Read and normalize key (trim + optional quotes from .env; fix double "sk-" if pasted wrong)
 let rawKey = (process.env.OPENAI_API_KEY || "").trim();
@@ -39,6 +42,11 @@ if (!(process.env.PHOTO_VISION_PROMPT_ID && process.env.INSPECTION_SUMMARY_PROMP
 import express from "express";
 import cors from "cors";
 import multer from "multer";
+import path from "path";
+import { fileURLToPath } from "url";
+import { existsSync } from "fs";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import OpenAI from "openai";
 import {
   uploadPhotoAndGetUrl,
@@ -60,7 +68,7 @@ import {
  *   INSPECTION_SUMMARY_PROMPT_ID
  *
  * Optional (for public photo URLs):
- *   FIREBASE_SERVICE_ACCOUNT - JSON string of service account key
+ *   FIREBASE_SERVICE_ACCOUNT_PATH - path to service account JSON key file
  *   FIREBASE_STORAGE_BUCKET - e.g. "your-project.appspot.com"
  *
  * Optional (tuning):
@@ -77,8 +85,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// For multipart/form-data (photos)
-const upload = multer({ storage: multer.memoryStorage() });
+// For multipart/form-data (photos) — 10MB per file, 20 max, images only
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_FILE_SIZE, files: 20 },
+  fileFilter: (req, file, cb) => {
+    const allowed = /^image\/(jpeg|jpg|png|gif|webp)$/i;
+    if (allowed.test(file.mimetype)) return cb(null, true);
+    cb(new Error(`Invalid file type: ${file.mimetype}. Use JPEG, PNG, GIF, or WebP.`));
+  },
+});
 
 // ----- Helpers -----
 function assertEnv(name) {
@@ -445,6 +462,26 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
     });
   }
 });
+
+// Multer/file upload errors (fileFilter, limits) — return 400 with message
+app.use((err, req, res, next) => {
+  if (err && (err.code === "LIMIT_FILE_SIZE" || err.code === "LIMIT_FILE_COUNT" || err.message?.includes("Invalid file type"))) {
+    return res.status(400).json({ ok: false, error: err.message || "Upload error" });
+  }
+  next(err);
+});
+
+// Serve built frontend when inspectai/dist exists (production or after build)
+const distPath = path.join(__dirname, "..", "inspectai", "dist");
+if (existsSync(distPath)) {
+  app.use(express.static(distPath));
+  // SPA fallback: serve index.html for non-API routes (runs after static when file not found)
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api")) return next();
+    res.sendFile(path.join(distPath, "index.html"));
+  });
+  console.log("Serving frontend from", distPath);
+}
 
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, async () => {

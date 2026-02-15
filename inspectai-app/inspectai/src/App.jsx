@@ -238,30 +238,35 @@ export default function App() {
     }
   });
 
-  // Auto-update proposal quantities from equipment when not yet touched
+  // Auto-update proposal quantities from equipment
+  // Enforced rule: base rate includes 1 hood + 1 fan, so "additional" is always (total - 1).
+  // Users can still edit rates/frequency/other line items; but these two quantities stay derived.
   useEffect(() => {
+    setAdditionalItems((prev) => {
+      const items = normalizeAdditionalItems({ additionalItems: prev, cleaningFrequency });
+
+      const wantHood = Math.max(hoods - 1, 0);
+      const wantFan = Math.max(fans - 1, 0);
+
+      const idxHood = items.findIndex(
+        (x) => String(x.description || "").trim().toLowerCase() === "additional hood"
+      );
+      const idxFan = items.findIndex(
+        (x) => String(x.description || "").trim().toLowerCase() === "additional fan"
+      );
+
+      if (idxHood >= 0) items[idxHood] = { ...items[idxHood], qty: wantHood };
+      if (idxFan >= 0) items[idxFan] = { ...items[idxFan], qty: wantFan };
+
+      return items;
+    });
+
+    // Keep filter-related quantities in sync until the user customizes pricing.
     if (!pricingTouched) {
-      setAdditionalItems((prev) => {
-        const items = Array.isArray(prev) && prev.length > 0
-          ? prev.map((a) => ({
-              ...a,
-              description: String(a?.description ?? ""),
-              qty: Number(a?.qty) || 0,
-              rate: Number(a?.rate) || 203,
-              frequency: String(a?.frequency ?? ""),
-            }))
-          : [
-              { description: "Additional Hood", qty: 0, rate: DEFAULT_RATES.additionalHoodRate, frequency: "" },
-              { description: "Additional Fan", qty: 0, rate: DEFAULT_RATES.additionalFanRate, frequency: "" },
-            ];
-        if (items.length >= 1) items[0] = { ...items[0], qty: Math.max(hoods - 1, 0) };
-        if (items.length >= 2) items[1] = { ...items[1], qty: Math.max(fans - 1, 0) };
-        return items;
-      });
       setStdFilterQty(filters);
       setFilterExchangeQty(filters);
     }
-  }, [hoods, fans, filters, pricingTouched]);
+  }, [hoods, fans, filters, pricingTouched, cleaningFrequency]);
 
   function buildDraftFromState() {
     const num = (v) => {
@@ -349,9 +354,21 @@ export default function App() {
 
       if (incoming.baseRate !== undefined) setBaseRate(incoming.baseRate);
       if (incoming.additionalItems !== undefined && Array.isArray(incoming.additionalItems)) {
-        setAdditionalItems(incoming.additionalItems);
-        const addHood = Number(incoming.additionalItems[0]?.qty) || 0;
-        const addFan = incoming.additionalItems.length >= 2 ? (Number(incoming.additionalItems[1]?.qty) || 0) : 0;
+        const normalized = normalizeAdditionalItems({
+          additionalItems: incoming.additionalItems,
+          cleaningFrequency: incoming.cleaningFrequency,
+        });
+        setAdditionalItems(normalized);
+
+        const hood = normalized.find(
+          (x) => String(x.description || "").trim().toLowerCase() === "additional hood"
+        );
+        const fan = normalized.find(
+          (x) => String(x.description || "").trim().toLowerCase() === "additional fan"
+        );
+
+        const addHood = Number(hood?.qty) || 0;
+        const addFan = Number(fan?.qty) || 0;
         setHoods(1 + addHood);
         setFans(1 + addFan);
       } else if (
@@ -544,6 +561,9 @@ export default function App() {
           filters,
           notes: notes.trim(),
           photoCount: photos.length,
+          analyzeAllPhotos,
+          pricingTouched,
+          proposalDraft: buildDraftFromState(),
         },
         report: {
           ...reportData,
@@ -984,6 +1004,42 @@ export default function App() {
                       setFans(h.snapshot?.fans ?? 0);
                       setFilters(h.snapshot?.filters ?? 0);
                       setNotes(h.snapshot?.notes ?? "");
+                      // Rehydrate proposal/pricing tab state when present
+                      const draft = h.snapshot?.proposalDraft;
+                      if (draft) {
+                        setProposalDate(draft.proposalDate ?? "");
+                        setCleaningFrequency(draft.cleaningFrequency ?? "");
+                        setBaseRate(String(draft.baseRate ?? DEFAULT_RATES.baseRate));
+                        setAdditionalItems(
+                          normalizeAdditionalItems({
+                            additionalItems: draft.additionalItems,
+                            cleaningFrequency: draft.cleaningFrequency ?? "",
+                          })
+                        );
+                        setRepairs(
+                          Array.isArray(draft.repairs) && draft.repairs.length > 0
+                            ? draft.repairs
+                            : [{ description: "", amount: 0 }]
+                        );
+                        setStdFilterQty(draft.stdFilterQty ?? 0);
+                        setStdFilterRate(String(draft.stdFilterRate ?? DEFAULT_RATES.stdFilterRate));
+                        setNonStdFilterQty(draft.nonStdFilterQty ?? 0);
+                        setNonStdFilterRate(String(draft.nonStdFilterRate ?? DEFAULT_RATES.nonStdFilterRate));
+                        setFuelSurcharge(String(draft.fuelSurcharge ?? DEFAULT_RATES.fuelSurcharge));
+                        setFilterExchangeQty(draft.filterExchangeQty ?? 0);
+                        setFilterExchangeUnitRate(
+                          String(draft.filterExchangeUnitRate ?? DEFAULT_RATES.stdFilterRate)
+                        );
+                        setFilterExchangeFrequency(draft.filterExchangeFrequency ?? "");
+                        // keep localStorage draft in sync for Proposal Preview
+                        writeDraft(mergeDraft(readDraft(), draft));
+                      }
+                      if (typeof h.snapshot?.pricingTouched === "boolean") {
+                        setPricingTouched(h.snapshot.pricingTouched);
+                      }
+                      if (typeof h.snapshot?.analyzeAllPhotos === "boolean") {
+                        setAnalyzeAllPhotos(h.snapshot.analyzeAllPhotos);
+                      }
                       const r = h.report ?? null;
                       setLatestReport(
                         r
