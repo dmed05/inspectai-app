@@ -45,6 +45,7 @@ import multer from "multer";
 import path from "path";
 import { fileURLToPath } from "url";
 import { existsSync } from "fs";
+import crypto from "crypto";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 import OpenAI from "openai";
@@ -233,10 +234,19 @@ app.get("/api/reports", async (req, res) => {
   }
 });
 
+// Fallback in-memory store for reports when Firebase is not configured (short share links + images)
+const fallbackReports = new Map();
+function shortId() {
+  return crypto.randomBytes(5).toString("base64url");
+}
+
 // ✅ Get single report by ID (for share page)
 app.get("/api/reports/:id", async (req, res) => {
   try {
-    const report = await getReportById(req.params.id);
+    let report = await getReportById(req.params.id);
+    if (!report && fallbackReports.has(req.params.id)) {
+      report = fallbackReports.get(req.params.id);
+    }
     if (!report) {
       return res.status(404).json({ ok: false, error: "Report not found" });
     }
@@ -421,7 +431,7 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
       _timing: { photoAnalysisTimeMs, summaryTimeMs, totalTimeMs },
     };
 
-    // Persist report for 30-day history and shareable links (includes uploaded photos via publicUrl)
+    // Persist report for 30-day history and shareable links (includes uploaded photos via publicUrl or dataUrl)
     try {
       const photosForStorage = photoAnalysis.map((p) => ({
         filename: p.filename || "",
@@ -429,7 +439,7 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
         caption: p.caption || "",
         publicUrl: p.publicUrl || null,
       }));
-      const reportId = await saveReport({
+      let reportId = await saveReport({
         restaurantName: (restaurantName || "").trim(),
         address: (address || "").trim(),
         hoods: String(hoods || "0"),
@@ -444,6 +454,32 @@ app.post("/api/generate", upload.array("photos", 20), async (req, res) => {
       if (reportId) reportPayload.reportId = reportId;
     } catch (saveErr) {
       console.warn("Report save (Firestore) failed:", saveErr?.message);
+    }
+    // When no reportId (Firebase not configured or save failed), use in-memory fallback for short links + images
+    if (!reportPayload.reportId) {
+      const photosWithDataUrl = photoResults.map((p, i) => ({
+        filename: p.filename || "",
+        analysis: p.analysis || "",
+        caption: toCaption(p.analysis),
+        publicUrl: p.publicUrl || null,
+        dataUrl: allFiles[i] ? fileToDataUrl(allFiles[i]) : null,
+      }));
+      const reportId = shortId();
+      fallbackReports.set(reportId, {
+        id: reportId,
+        reportText: inspectionSummary,
+        summary: inspectionSummary,
+        restaurantName: (restaurantName || "").trim(),
+        address: (address || "").trim(),
+        hoods: String(hoods || "0"),
+        fans: String(fans || "0"),
+        filters: String(filters || "0"),
+        notes: (notes || "").trim(),
+        photos: photosWithDataUrl,
+        photoAnalysis: photosWithDataUrl,
+        createdAt: new Date().toISOString(),
+      });
+      reportPayload.reportId = reportId;
     }
 
     res.json(reportPayload);

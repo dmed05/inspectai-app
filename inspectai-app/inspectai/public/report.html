@@ -329,7 +329,7 @@
       function renderReport(data) {
         const reportText = data.reportText || data.summary || '';
         const photos = data.photos || data.photoAnalysis || [];
-        const usablePhotos = photos.filter(function(p) { return p && (p.publicUrl || p.localUrl); });
+        const usablePhotos = photos.filter(function(p) { return p && (p.publicUrl || p.dataUrl || p.localUrl); });
 
         const icons = {
           summary: '📋',
@@ -358,7 +358,7 @@
           html += '<p class="photos-hint">Click any image to expand.</p>';
           html += '<div class="photos-grid">';
           usablePhotos.forEach(function(p, i) {
-            const url = p.publicUrl || p.localUrl;
+            const url = p.publicUrl || p.dataUrl || p.localUrl;
             var caption = p.caption || p.filename || '';
             if (typeof caption === 'string' && (caption.startsWith('{') || caption.length > 60)) caption = '';
             const shortCaption = caption ? (caption.length > 40 ? caption.slice(0, 37) + '…' : caption) : '';
@@ -397,7 +397,7 @@
           function showImg(i) {
             idx = (i + usablePhotos.length) % usablePhotos.length;
             const p = usablePhotos[idx];
-            lbImg.src = p.publicUrl || p.localUrl;
+            lbImg.src = p.publicUrl || p.dataUrl || p.localUrl;
             lbCaption.innerHTML = '<span class="lightbox-counter">' + (idx + 1) + ' / ' + usablePhotos.length + '</span>' +
               (p.caption || p.filename ? ' • ' + (p.caption || p.filename) : '');
           }
