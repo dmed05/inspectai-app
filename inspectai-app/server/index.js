@@ -240,7 +240,7 @@ function shortId() {
   return crypto.randomBytes(5).toString("base64url");
 }
 
-// ✅ Get single report by ID (for share page)
+// ✅ Get single report by ID (for share page) — same report as 30-day retention; share link stays visible for 30 days
 app.get("/api/reports/:id", async (req, res) => {
   try {
     let report = await getReportById(req.params.id);
@@ -520,13 +520,20 @@ if (existsSync(distPath)) {
 }
 
 const PORT = process.env.PORT || 5050;
+const RETENTION_DAYS = 30;
+
 app.listen(PORT, async () => {
   console.log(`Server running on http://localhost:${PORT}`);
-  // Cleanup reports older than 30 days on startup
-  try {
-    const deleted = await deleteReportsOlderThan(30);
-    if (deleted > 0) console.log(`Deleted ${deleted} reports older than 30 days`);
-  } catch (e) {
-    console.warn("Report cleanup on startup failed:", e?.message);
+  // Cleanup reports older than 30 days so share links stay visible for exactly 30 days, then are removed
+  async function cleanupOldReports() {
+    try {
+      const deleted = await deleteReportsOlderThan(RETENTION_DAYS);
+      if (deleted > 0) console.log(`Deleted ${deleted} reports older than ${RETENTION_DAYS} days`);
+    } catch (e) {
+      console.warn("Report cleanup failed:", e?.message);
+    }
   }
+  await cleanupOldReports();
+  // Run cleanup daily so 30-day retention is enforced even without server restart
+  setInterval(cleanupOldReports, 24 * 60 * 60 * 1000);
 });
