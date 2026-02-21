@@ -1,0 +1,11 @@
+{
+  "name": "inspectai-app",
+  "private": true,
+  "scripts": {
+    "dev": "npm run dev --prefix inspectai",
+    "dev:server": "npm start --prefix server",
+    "build": "npm install --prefix server && npm install --prefix inspectai && npm run build --prefix inspectai",
+    "start": "npm run build && npm start --prefix server",
+    "start:prod": "npm start --prefix server"
+  }
+}

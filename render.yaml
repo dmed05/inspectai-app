@@ -1,0 +1,21 @@
+# Render.com — InspectAI
+# Deploy: connect repo and use this blueprint, or set Build/Start manually.
+
+services:
+  - type: web
+    name: inspectai-app
+    runtime: node
+    region: oregon
+
+    buildCommand: npm run build
+    startCommand: npm run start:prod
+
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      # Add these in Render Dashboard → Environment (do not commit secrets):
+      # OPENAI_API_KEY
+      # PHOTO_VISION_PROMPT_ID
+      # INSPECTION_SUMMARY_PROMPT_ID
+      # Optional: FIREBASE_SERVICE_ACCOUNT_PATH, FIREBASE_STORAGE_BUCKET
+      # Optional: PORT (Render sets this automatically)
